@@ -5,7 +5,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module TPC.State where
+module TPCC.Data where
 
 import Data.Aeson
 import Data.Map (Map)

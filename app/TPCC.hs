@@ -1,10 +1,10 @@
-module TPC where
+module TPCC where
 
 import qualified Data.Map as Map
 import Lang.Carol
 import Lens.Micro.Platform
 
-import TPC.State
+import TPCC.Data
 
 quantityEf :: OrderLine -> Ef TPCC
 quantityEf ol = EfTStock

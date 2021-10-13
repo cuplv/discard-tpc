@@ -19,7 +19,9 @@ type CustomerId = String
 
 type ItemId = String
 
-type OrderId = Int
+type ReplicaId = Int
+
+type OrderId = (ReplicaId,Int)
 
 type CarrierId = String
 
@@ -38,6 +40,15 @@ instance (Show a, Read a, Eq a, Ord a, Generic a) => CARD (Setable a) where
   data Cr (Setable a) deriving (Show,Read,Eq,Ord,Generic)
   defineConflict = undefined
   defineLe = undefined
+
+-- | A CARD for maps.
+data SimpleKV k v = SimpleKV { simpleKV :: Map k v }
+  deriving (Show,Read,Eq,Ord,Generic)
+
+instance (Show k, Read k, Eq k, Ord k, Generic k, Show v, Read v, Eq v, Ord v, Generic v) => CARD (SimpleKV k v) where
+  data Ef (SimpleKV k v) = KVAdd k v deriving (Show,Read,Eq,Ord,Generic)
+  defineEffect (SimpleKV m) (KVAdd k v) = SimpleKV (Map.insert k v m)
+  data Cr (SimpleKV k v) deriving (Show,Read,Eq,Ord,Generic)
 
 -- | A generic CARD for a maybe value, providing a guard for
 -- confirming that the value is Nothing.
@@ -161,7 +172,7 @@ data TPCC
   = TPCC { _tpccStock :: Map (WarehouseId,ItemId) Stock
          , _tpccItems :: Map ItemId Item
          , _tpccCustomers :: Map CustomerId Customer
-         , _tpccOrders :: Map OrderId Order
+         , _tpccOrders :: SimpleKV OrderId Order
          }
   deriving (Show,Read,Eq,Ord,Generic)
 
@@ -171,9 +182,14 @@ instance CARD TPCC where
   data Ef TPCC
     = EfTStock (WarehouseId, ItemId) (Ef Stock)
     | EfTCustomers CustomerId (Ef Customer)
+    | EfTOrders (Ef (SimpleKV OrderId Order))
     deriving (Show,Read,Eq,Ord,Generic)
   defineEffect s (EfTStock i e) = 
     over (tpccStock . at i . _Just) (runEf e) s
+  defineEffect s (EfTCustomers i e) =
+    over (tpccCustomers . at i . _Just) (runEf e) s
+  defineEffect s (EfTOrders e) =
+    over tpccOrders (runEf e) s
   data Cr TPCC
     = CrTStock (WarehouseId, ItemId) (Cr Stock)
     | CrTCustomers CustomerId (Cr Customer)

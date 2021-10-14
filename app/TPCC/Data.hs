@@ -12,6 +12,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.CARD
+import Data.CARD.Combinator
 import GHC.Generics
 import Lens.Micro.Platform
 
@@ -26,20 +27,6 @@ type OrderId = (ReplicaId,Int)
 type CarrierId = String
 
 type WarehouseId = String
-
--- | The "empty CARD" which simply allows setting a new value and
--- provides no domain-specific conrefs. This could be replaced by
--- making Set a generic effect, in the same way that EQV is a generic
--- conref.
-data Setable a = Setable a
-  deriving (Show,Read,Eq,Ord,Generic)
-
-instance (Show a, Read a, Eq a, Ord a, Generic a) => CARD (Setable a) where
-  data Ef (Setable a) = SSet a deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect (Setable _) (SSet a) = Setable a
-  data Cr (Setable a) deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict = undefined
-  defineLe = undefined
 
 -- | A CARD for maps.
 data SimpleKV k v = SimpleKV { simpleKV :: Map k v }
@@ -89,8 +76,6 @@ data Order
           }
   deriving (Show,Read,Eq,Ord,Generic)
 
-runEf s e = defineEffect e s
-
 makeLenses ''Order
 
 instance CARD Order where
@@ -113,60 +98,79 @@ data Item
 
 makeLenses ''Item
 
-data Stock
-  = Stock { _sQuantity :: Counter
-          , _sYtd :: Counter
-          , _sOrderCount :: Counter
-          , _sRemoteCount :: Counter
-          }
-  deriving (Show,Read,Eq,Ord,Generic)
+type Stock = CProduct4 Counter
 
-makeLenses ''Stock
+sQuantity :: Lens' Stock Int
+sQuantity = cFst . counter
 
-data StockTag = SQuantity | SYtd | SOrderCount | SRemoteCount
-  deriving (Show,Read,Eq,Ord,Generic)
+sYtd :: Lens' Stock Int
+sYtd = cSnd . cFst . counter
 
-stockLens :: StockTag -> Lens' Stock Counter
-stockLens = \case
-  SQuantity -> sQuantity
-  SYtd -> sYtd
-  SOrderCount -> sOrderCount
-  SRemoteCount -> sRemoteCount
+sOrderCount :: Lens' Stock Int
+sOrderCount = cSnd . cSnd . cFst . counter
 
-instance CARD Stock where
-  data Ef Stock
-    = EfSCounter StockTag (Ef Counter)
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect s (EfSCounter t e) = over (stockLens t) (runEf e) s
-  data Cr Stock
-    = CrSCounter StockTag (Cr Counter)
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict (CrSCounter t1 c) (EfSCounter t2 e) | t1 == t2 = 
-                                                       defineConflict c e
-                                                     | otherwise = False
-  defineLe (CrSCounter t c) (Effect es1) (Effect es2) = 
-    let f (EfSCounter t1 e1) | t1 == t = Just e1
-                             | otherwise = Nothing
-    in defineLe c (Effect $ catMaybes (map f es1))
-                  (Effect $ catMaybes (map f es2))
+sRemoteCount :: Lens' Stock Int
+sRemoteCount = cSnd . cSnd . cSnd . counter
 
-data Customer
-  = Customer { _cBalance :: Counter }
-  deriving (Show,Read,Eq,Ord,Generic)
+-- data Stock
+--   = Stock { _sQuantity :: Counter
+--           , _sYtd :: Counter
+--           , _sOrderCount :: Counter
+--           , _sRemoteCount :: Counter
+--           }
+--   deriving (Show,Read,Eq,Ord,Generic)
 
-makeLenses ''Customer
+-- makeLenses ''Stock
 
-instance CARD Customer where
-  data Ef Customer
-    = EfCustomer { efCustomer :: Ef Counter }
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect s (EfCustomer e) = over cBalance (runEf e) s
-  data Cr Customer
-    = CrCustomer (Cr Counter)
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict (CrCustomer c) (EfCustomer e) = defineConflict c e
-  defineLe (CrCustomer c) (Effect es1) (Effect es2) =
-    defineLe c (Effect $ map efCustomer es1) (Effect $ map efCustomer es2)
+-- data StockTag = SQuantity | SYtd | SOrderCount | SRemoteCount
+--   deriving (Show,Read,Eq,Ord,Generic)
+
+-- stockLens :: StockTag -> Lens' Stock Counter
+-- stockLens = \case
+--   SQuantity -> sQuantity
+--   SYtd -> sYtd
+--   SOrderCount -> sOrderCount
+--   SRemoteCount -> sRemoteCount
+
+-- instance CARD Stock where
+--   data Ef Stock
+--     = EfSCounter StockTag (Ef Counter)
+--     deriving (Show,Read,Eq,Ord,Generic)
+--   defineEffect s (EfSCounter t e) = over (stockLens t) (runEf e) s
+--   data Cr Stock
+--     = CrSCounter StockTag (Cr Counter)
+--     deriving (Show,Read,Eq,Ord,Generic)
+--   defineConflict (CrSCounter t1 c) (EfSCounter t2 e) | t1 == t2 = 
+--                                                        defineConflict c e
+--                                                      | otherwise = False
+--   defineLe (CrSCounter t c) (Effect es1) (Effect es2) = 
+--     let f (EfSCounter t1 e1) | t1 == t = Just e1
+--                              | otherwise = Nothing
+--     in defineLe c (Effect $ catMaybes (map f es1))
+--                   (Effect $ catMaybes (map f es2))
+
+type Customer = Counter
+
+cBalance :: Lens' Customer Int
+cBalance = counter
+
+-- data Customer
+--   = Customer { _cBalance :: Counter }
+--   deriving (Show,Read,Eq,Ord,Generic)
+
+-- makeLenses ''Customer
+
+-- instance CARD Customer where
+--   data Ef Customer
+--     = EfCustomer { efCustomer :: Ef Counter }
+--     deriving (Show,Read,Eq,Ord,Generic)
+--   defineEffect s (EfCustomer e) = over cBalance (runEf e) s
+--   data Cr Customer
+--     = CrCustomer (Cr Counter)
+--     deriving (Show,Read,Eq,Ord,Generic)
+--   defineConflict (CrCustomer c) (EfCustomer e) = defineConflict c e
+--   defineLe (CrCustomer c) (Effect es1) (Effect es2) =
+--     defineLe c (Effect $ map efCustomer es1) (Effect $ map efCustomer es2)
 
 data TPCC
   = TPCC { _tpccStock :: Map (WarehouseId,ItemId) Stock

@@ -12,9 +12,13 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.CARD
-import Data.CARD.Combinator
+import Data.CARD.Counter
+import Data.CARD.Map
+import Data.CARD.Maybe
 import GHC.Generics
 import Lens.Micro.Platform
+
+type UC = UniversalC
 
 type CustomerId = String
 
@@ -28,37 +32,6 @@ type CarrierId = String
 
 type WarehouseId = String
 
--- | A CARD for maps.
-data SimpleKV k v = SimpleKV { simpleKV :: Map k v }
-  deriving (Show,Read,Eq,Ord,Generic)
-
-instance (Show k, Read k, Eq k, Ord k, Generic k, Show v, Read v, Eq v, Ord v, Generic v) => CARD (SimpleKV k v) where
-  data Ef (SimpleKV k v) = KVAdd k v deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect (SimpleKV m) (KVAdd k v) = SimpleKV (Map.insert k v m)
-  data Cr (SimpleKV k v) deriving (Show,Read,Eq,Ord,Generic)
-
--- | A generic CARD for a maybe value, providing a guard for
--- confirming that the value is Nothing.
-data Justable a = Justable (Maybe a)
-  deriving (Show,Read,Eq,Ord,Generic)
-
-instance (Show a, Read a, Eq a, Ord a, Generic a) => CARD (Justable a) where
-  data Ef (Justable a) 
-    = SetJust a
-    | SetNothing
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect (Justable _) (SetJust a) = Justable (Just a)
-  defineEffect (Justable _) SetNothing = Justable Nothing
-  data Cr (Justable a) = IsNothing deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict IsNothing e = case e of
-                                 SetJust _ -> True
-                                 SetNothing -> False
-  defineLe IsNothing e1 e2 =
-    let hasJust (Effect es) = length (filter (\case
-                                                 SetJust _ -> True
-                                                 SetNothing -> False) es) > 0
-    in hasJust e1 && not (hasJust e2)
-
 data OrderLine
   = OrderLine { _olItemId :: ItemId
               , _olQuantity :: Int
@@ -68,27 +41,38 @@ data OrderLine
 
 makeLenses ''OrderLine
 
-data Order
-  = Order { _oCId :: CustomerId
-          , _oDate :: String
-          , _oCaId :: Justable CarrierId
-          , _oLines :: [OrderLine]
-          }
+data OrderInfo
+  = OrderInfo { _oiCId :: CustomerId
+              , _oiDate :: String
+              , _oiLines :: [OrderLine]
+              }
   deriving (Show,Read,Eq,Ord,Generic)
 
-makeLenses ''Order
+makeLenses ''OrderInfo
 
-instance CARD Order where
-  data Ef Order
-    = OnOCaId { onOCaId :: Ef (Justable CarrierId) }
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect s (OnOCaId e) = over oCaId (runEf e) s
-  data Cr Order
-    = OfOCaId (Cr (Justable CarrierId))
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict (OfOCaId c) (OnOCaId e) = defineConflict c e
-  defineLe (OfOCaId c) (Effect es1) (Effect es2) =
-    defineLe c (Effect $ map onOCaId es1) (Effect $ map onOCaId es2)
+type Order = (OrderInfo, Maybe CarrierId)
+
+mkOrder :: CustomerId -> String -> [OrderLine] -> Order
+mkOrder a b c = (OrderInfo a b c,Nothing)
+
+oCId :: Lens' Order CustomerId
+oCId = _1 . oiCId
+
+oDate :: Lens' Order String
+oDate = _1 . oiDate
+
+oLines :: Lens' Order [OrderLine]
+oLines = _1 . oiLines
+
+oCarrierId :: Lens' (a,b) b
+oCarrierId = _2
+
+type OrderE = ((), MaybeE () CarrierId)
+
+type OrderC = (UC (), UC (MaybeC ()))
+
+setCarrierId :: CarrierId -> OrderE
+setCarrierId i = mempty & oCarrierId .~ (insertE i)
 
 data Item
   = Item { _iName :: String
@@ -98,118 +82,79 @@ data Item
 
 makeLenses ''Item
 
-type Stock = CProduct4 Counter
+type Stock = (Int,Int,Int,Int)
 
-sQuantity :: Lens' Stock Int
-sQuantity = cFst . counter
+sQuantity :: Lens' (a,b,c,d) a
+sQuantity = _1
 
-sYtd :: Lens' Stock Int
-sYtd = cSnd . cFst . counter
+sYtd :: Lens' (a,b,c,d) b
+sYtd = _2
 
-sOrderCount :: Lens' Stock Int
-sOrderCount = cSnd . cSnd . cFst . counter
+sOrderCount :: Lens' (a,b,c,d) c
+sOrderCount = _3
 
-sRemoteCount :: Lens' Stock Int
-sRemoteCount = cSnd . cSnd . cSnd . counter
+sRemoteCount :: Lens' (a,b,c,d) d
+sRemoteCount = _4
 
--- data Stock
---   = Stock { _sQuantity :: Counter
---           , _sYtd :: Counter
---           , _sOrderCount :: Counter
---           , _sRemoteCount :: Counter
---           }
---   deriving (Show,Read,Eq,Ord,Generic)
+type IntE = CounterE Int
+type IntC = CounterC Int
 
--- makeLenses ''Stock
+type StockE 
+  = ( IntE
+    , IntE
+    , IntE
+    , IntE
+    )
 
--- data StockTag = SQuantity | SYtd | SOrderCount | SRemoteCount
---   deriving (Show,Read,Eq,Ord,Generic)
+type StockC = (IntC, IntC, IntC, IntC)
 
--- stockLens :: StockTag -> Lens' Stock Counter
--- stockLens = \case
---   SQuantity -> sQuantity
---   SYtd -> sYtd
---   SOrderCount -> sOrderCount
---   SRemoteCount -> sRemoteCount
-
--- instance CARD Stock where
---   data Ef Stock
---     = EfSCounter StockTag (Ef Counter)
---     deriving (Show,Read,Eq,Ord,Generic)
---   defineEffect s (EfSCounter t e) = over (stockLens t) (runEf e) s
---   data Cr Stock
---     = CrSCounter StockTag (Cr Counter)
---     deriving (Show,Read,Eq,Ord,Generic)
---   defineConflict (CrSCounter t1 c) (EfSCounter t2 e) | t1 == t2 = 
---                                                        defineConflict c e
---                                                      | otherwise = False
---   defineLe (CrSCounter t c) (Effect es1) (Effect es2) = 
---     let f (EfSCounter t1 e1) | t1 == t = Just e1
---                              | otherwise = Nothing
---     in defineLe c (Effect $ catMaybes (map f es1))
---                   (Effect $ catMaybes (map f es2))
-
-type Customer = Counter
-
-cBalance :: Lens' Customer Int
-cBalance = counter
-
--- data Customer
---   = Customer { _cBalance :: Counter }
---   deriving (Show,Read,Eq,Ord,Generic)
-
--- makeLenses ''Customer
-
--- instance CARD Customer where
---   data Ef Customer
---     = EfCustomer { efCustomer :: Ef Counter }
---     deriving (Show,Read,Eq,Ord,Generic)
---   defineEffect s (EfCustomer e) = over cBalance (runEf e) s
---   data Cr Customer
---     = CrCustomer (Cr Counter)
---     deriving (Show,Read,Eq,Ord,Generic)
---   defineConflict (CrCustomer c) (EfCustomer e) = defineConflict c e
---   defineLe (CrCustomer c) (Effect es1) (Effect es2) =
---     defineLe c (Effect $ map efCustomer es1) (Effect $ map efCustomer es2)
-
-data TPCC
-  = TPCC { _tpccStock :: Map (WarehouseId,ItemId) Stock
-         , _tpccItems :: Map ItemId Item
-         , _tpccCustomers :: Map CustomerId Customer
-         , _tpccOrders :: SimpleKV OrderId Order
-         }
+data CustomerInfo
+  = CustomerInfo { _ciName :: String }
   deriving (Show,Read,Eq,Ord,Generic)
 
-makeLenses ''TPCC
+makeLenses ''CustomerInfo
 
-instance CARD TPCC where
-  data Ef TPCC
-    = EfTStock (WarehouseId, ItemId) (Ef Stock)
-    | EfTCustomers CustomerId (Ef Customer)
-    | EfTOrders (Ef (SimpleKV OrderId Order))
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineEffect s (EfTStock i e) = 
-    over (tpccStock . at i . _Just) (runEf e) s
-  defineEffect s (EfTCustomers i e) =
-    over (tpccCustomers . at i . _Just) (runEf e) s
-  defineEffect s (EfTOrders e) =
-    over tpccOrders (runEf e) s
-  data Cr TPCC
-    = CrTStock (WarehouseId, ItemId) (Cr Stock)
-    | CrTCustomers CustomerId (Cr Customer)
-    deriving (Show,Read,Eq,Ord,Generic)
-  defineConflict c e = case (c,e) of
-    (CrTStock i1 c, EfTStock i2 e) | i1 == i2 -> defineConflict c e
-    (CrTCustomers i1 c, EfTCustomers i2 e) | i1 == i2 -> defineConflict c e
-    _ -> False
-  defineLe c (Effect es1) (Effect es2) = case c of
-    CrTStock i c ->
-      let f (EfTStock i1 e1) | i1 == i = Just e1
-          f _ = Nothing
-      in defineLe c (Effect $ catMaybes (map f es1)) 
-                    (Effect $ catMaybes (map f es2))
-    CrTCustomers i c ->
-      let f (EfTCustomers i1 e1) | i1 == i = Just e1
-          f _ = Nothing
-      in defineLe c (Effect $ catMaybes (map f es1)) 
-                    (Effect $ catMaybes (map f es2))
+type Customer = (CustomerInfo, Int)
+
+type CustomerE = ((), IntE)
+
+type CustomerC = (UC (), IntC)
+
+cName :: Lens' Customer String
+cName = _1 . ciName
+
+cBalance :: Lens' Customer Int
+cBalance = _2
+
+type Tpcc 
+  = ( Map (WarehouseId, ItemId) Stock -- stock
+    , Map ItemId Item -- items
+    , Map CustomerId Customer -- customers
+    , Map OrderId Order -- orders
+    )
+
+type TpccE
+  = ( MapE (WarehouseId, ItemId) StockE Stock
+    , MapE ItemId () Item
+    , MapE CustomerId CustomerE Customer
+    , MapE OrderId OrderE Order
+    )
+
+type TpccC
+  = ( MapC (WarehouseId, ItemId) StockC
+    , MapC ItemId (UC ())
+    , MapC CustomerId CustomerC
+    , MapC OrderId OrderC
+    )
+
+tpccStock :: Lens' Tpcc (Map (WarehouseId, ItemId) Stock)
+tpccStock = _1
+
+tpccItems :: Lens' Tpcc (Map ItemId Item)
+tpccItems = _2
+
+tpccCustomers :: Lens' Tpcc (Map CustomerId Customer)
+tpccCustomers = _3
+
+tpccOrders :: Lens' Tpcc (Map OrderId Order)
+tpccOrders = _4
